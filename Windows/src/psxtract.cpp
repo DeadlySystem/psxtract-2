@@ -389,6 +389,18 @@ int build_iso(FILE *psar, FILE *iso_table, int base_offset, int disc_num)
 	return 0;
 }
 
+#define ES32(v)((unsigned long int)(((v & 0xFF000000) >> 24) | \
+                           ((v & 0x00FF0000) >> 8 ) | \
+							             ((v & 0x0000FF00) << 8 ) | \
+							             ((v & 0x000000FF) << 24)))
+							             
+unsigned long int ROTR32(unsigned long int v, signed long int n)
+{
+  return (((n &= 32 - 1) == 0) ? v : (v >> n) | (v << (32 - n)));
+}
+
+#define NBYTES    0x180
+
 int build_audio(FILE *psar, FILE *iso_table, int base_offset, unsigned char *pgd_key)
 {	
 	if ((psar == NULL) || (iso_table == NULL))
@@ -399,6 +411,9 @@ int build_audio(FILE *psar, FILE *iso_table, int base_offset, unsigned char *pgd
 	char track_filename[0x10];
 	int i=1;
 	int iso_base_offset = 0x100000 + base_offset;  // Start of audio tracks.
+
+	signed long int aux_i, aux_k, aux_total_size = 0;
+	unsigned long int *aux_chunk = NULL;
 
 	CDDA_ENTRY audio_entry[sizeof(CDDA_ENTRY)];
 	memset(audio_entry, 0, sizeof(CDDA_ENTRY));
@@ -424,10 +439,18 @@ int build_audio(FILE *psar, FILE *iso_table, int base_offset, unsigned char *pgd
 		unsigned char *track_data = new unsigned char[audio_entry->size];
 		fread(track_data, 1, audio_entry->size, psar);
 
+		aux_total_size = audio_entry->size;
+		//printf("%08X-aux_total_size\n", aux_total_size);
+		
+		// open temp buffer
+		void *tmp_buf = malloc(NBYTES * 0x10);
+		
+		unsigned long int r8 = 0, r0 = 0, r11 = 0;
+
 		// Store the decrypted unknown data.
 		// Open a new file to write the track image.
 		sprintf(track_filename, "TRACK %02d.BIN", i);
-		FILE* track = fopen(track_filename, "wb");
+		FILE* track = fopen(track_filename, "wb+");
 		if (track == NULL)
 		{
 			printf("ERROR: Can't open output file for audio track %d!\n", i);
@@ -435,6 +458,41 @@ int build_audio(FILE *psar, FILE *iso_table, int base_offset, unsigned char *pgd
 		}
 
 		printf("Extracting audio track...%02d!\n", i);
+
+		while(1)
+		{
+			memset(tmp_buf, 0, NBYTES * 0x10);
+			memcpy(tmp_buf, track_data, NBYTES * 0x10);
+			aux_chunk = (unsigned long int*)tmp_buf;
+			
+			//checksum
+			r8 = ES32(audio_entry->checksum);
+			
+
+			for(aux_i = 0; aux_i < 16; aux_i++)
+			{
+				r11 = r8;
+				
+				for(aux_k = 0; aux_k < (NBYTES / 4); aux_k++)
+				{
+					r0 = ES32(aux_chunk[aux_k + ((NBYTES / 4) * aux_i)]);
+					r11 = r11 ^ r0;
+					aux_chunk[aux_k + ((NBYTES / 4) * aux_i)] = ES32(r11);
+					r0 = r0 * 123456789;
+				r11 = r8 + r0;
+				}
+		  
+				r8 = ROTR32(r8, 1);
+				printf("%08X\n", r8);
+			}
+			
+			//fwrite(tmp_buf, 1, NBYTES * 0x10, track_data);
+			fwrite(tmp_buf, NBYTES * 0x10, 1, track);
+			aux_total_size -= (NBYTES * 0x10);
+			if(aux_total_size <= 0) break;
+		}
+		
+		
 
 		// Decrypt the PGD and save the data.
 		// int pgd_size = decrypt_pgd(track_data, audio_entry->size, 2, pgd_key);
@@ -450,7 +508,7 @@ int build_audio(FILE *psar, FILE *iso_table, int base_offset, unsigned char *pgd
 		// }
 
 		// fwrite(track_data, 1, pgd_size, track);
-		fwrite(track_data, 1, audio_entry->size, track);
+		
 		// unsigned char iso_block_decomp[0x3000000]; // Decompressed block.
 		// decompress(iso_block_decomp, track_data, audio_entry->size);
 

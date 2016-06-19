@@ -64,7 +64,7 @@ typedef struct {
 	unsigned int     offset;
 	unsigned int     size;
 	unsigned char    padding[0x4];
-	unsigned char	 checksum[0x4];
+	unsigned int	 checksum;
 } CDDA_ENTRY;
 
 // ISO table entry structure.
