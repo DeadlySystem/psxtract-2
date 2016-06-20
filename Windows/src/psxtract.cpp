@@ -401,6 +401,58 @@ unsigned int ROTR32(unsigned int v, int n)
 
 #define NBYTES    0x180
 
+int unscramble_atrac_data(unsigned char *track_data, CDDA_ENTRY *track)
+{
+	unsigned int blocks = (track->size / NBYTES) / 0x10;
+	unsigned int chunks_rest = (track->size / NBYTES) % 0x10;
+	unsigned int *ptr = (unsigned int*)track_data;
+	unsigned int tmp = 0, tmp2 = track->checksum, value = 0;
+	
+	
+	
+	// for each block
+	while(blocks)
+	{
+		// for each chunk of block
+		for(int i = 0; i < 0x10; i++)
+		{
+			tmp = tmp2;
+			
+			// for each value of chunk
+			for(int k = 0; k < (NBYTES / 4); k++)
+			{
+				value = ptr[k];
+				ptr[k] = (tmp ^ value);
+		    tmp = tmp2 + (value * 123456789);
+			}
+			
+			tmp2 = ROTR32(tmp2, 1);
+			ptr += (NBYTES / 4); // pointer on next chunk
+		}
+		
+		blocks--;
+	}
+	
+	// do rest chunks
+	for(unsigned int i = 0; i < chunks_rest; i++)
+  {
+    tmp = tmp2;
+	  
+	  // for each value of chunk
+	  for(int k = 0; k < (NBYTES / 4); k++)
+	  {
+	    value = ptr[k];
+		  ptr[k] = (tmp ^ value);
+		  tmp = tmp2 + (value * 123456789);
+	  }
+    
+    tmp2 = ROTR32(tmp2, 1);
+	  ptr += (NBYTES / 4); // next chunk
+  }
+  
+	return 0;
+}
+
 int build_audio(FILE *psar, FILE *iso_table, int base_offset, unsigned char *pgd_key)
 {	
 	if ((psar == NULL) || (iso_table == NULL))
@@ -451,64 +503,12 @@ int build_audio(FILE *psar, FILE *iso_table, int base_offset, unsigned char *pgd
 
 		printf("Extracting audio track...%02d!\n", i);
 		
+		unscramble_atrac_data(track_data, audio_entry);
+		
 		fwrite(track_data, 1, audio_entry->size, track);
 		
 		fclose(track);
 		delete[] track_data;
-		
-		int aux_i, k, total_size = 0;
-		unsigned int *chunk = NULL;
-	
-		// open file and get size
-		FILE* input = fopen(track_filename, "rb");
-		fseek(input, 0, SEEK_END);
-		total_size = ftell(input);
-		fseek(input, 0, SEEK_SET);
-		
-		printf("input_size: 0x%08X\n", total_size);
-	  
-		// open output file
-		char track_filename_out[0x10];
-		sprintf(track_filename_out, "TRACK %02d_OUT.BIN", i);
-		FILE* output = fopen(track_filename_out, "wb");
-		
-		// open temp buffer
-		void *tmp_buf = malloc(NBYTES * 0x10);
-		
-		unsigned int r8 = 0, r0 = 0, r11 = 0;
-		
-		while(1)
-		{
-			memset(tmp_buf, 0, NBYTES * 0x10);
-			fread(tmp_buf, NBYTES * 0x10, 1, input);
-			chunk = (unsigned int*)tmp_buf;
-			
-			//checksum
-			r8 = ES32(audio_entry->checksum);
-			
-			for(aux_i = 0; aux_i < 16; aux_i++)
-			{
-				r11 = r8;
-				
-				for(k = 0; k < (NBYTES / 4); k++)
-				{
-					r0 = ES32(chunk[k + ((NBYTES / 4) * aux_i)]);
-					r11 = r11 ^ r0;
-					chunk[k + ((NBYTES / 4) * aux_i)] = ES32(r11);
-					r0 = r0 * 123456789;
-				r11 = r8 + r0;
-				}
-		  
-				r8 = ROTR32(r8, 1);
-			}
-			
-			fwrite(tmp_buf, NBYTES * 0x10, 1, output);
-			total_size -= (NBYTES * 0x10);
-			if(total_size <= 0) break;
-		}
-		free(tmp_buf);
-		fclose(input);
-		fclose(output);
 		
 		audio_offset += sizeof(CDDA_ENTRY);
 		// Go to next entry.
